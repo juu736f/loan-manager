@@ -2,6 +2,10 @@ import os
 import logging as log
 import argparse
 import mysql.connector as sql
+import random
+import string
+from tabulate import tabulate as tab
+import asyncio ## debugging
 
 workingDir = os.getcwd()
 dbcredPath = os.path.join(workingDir, "dbcred")
@@ -21,7 +25,7 @@ def main():
     log.info("main invoked")
     readPermission = readPermissionCheck()
     if readPermission == True:
-        wait()
+        initDBcred()
     else:
         print("Fatal error")
         return
@@ -30,7 +34,7 @@ def initDBcred():
     log.info("initDBcred invoked")
     if os.path.exists(dbcredPath):
         log.info("dbcred found")
-        wait()
+        dbWriteCheck()
     else:
         log.warning("dbcred NOT found")
         dbcredMenu()
@@ -107,23 +111,17 @@ def dbConn():
 
 
 def dbWriteCheck():
-    conn = dbConn()
     log.info("dbWriteCheck invoked")
-    cursor = conn.cursor()  # Create the cursor manually
+    randomData = randomNameGenerator()
+    rLastname = randomData[0]
+    rFirstname = randomData[1]
+    rEmail = randomData[2]
+    rTelephone = randomData[3]
+    conn = dbConn()
+    cursor = conn.cursor() 
     try:
-        # Input from the user
-        LastName = input("Insert last name: ")
-        FirstName = input("Insert first name: ")
-        Email = input("Insert email: ")
-        Telephone = input("Insert telephone: ")
-
-        # Correct SQL query with placeholders for values
         query = "INSERT INTO `customers` (`LastName`, `FirstName`, `Email`, `Telephone`) VALUES (%s, %s, %s, %s)"
-
-        # Executing the query and passing the user input as a tuple
-        cursor.execute(query, (LastName, FirstName, Email, Telephone))
-
-        # Commit the transaction
+        cursor.execute(query, (rLastname, rFirstname, rEmail, rTelephone))
         conn.commit()
         log.info("Data written to Database")
     finally:
@@ -132,10 +130,36 @@ def dbWriteCheck():
 
 def dbReadCheck():
     log.info("dbReadCheck invoked")
+    conn = dbConn()
+    cursor = conn.cursor()
+    try:
+        query = "SELECT * FROM `customers`"
+        cursor.execute(query)
+        queryResult = cursor.fetchall()
+        headers = ['ID', 'Last Name', 'First Name', 'Email', 'Phone']
+        for res in queryResult:
+            print(tab(res, headers=headers, tablefmt='grid'))
+    finally:
+        sleep()
+        
+def randomNameGenerator():
+    lastnameLength = 8
+    firstnameLength = 5
+    emailHostLength = 8
+    emailTLD = ".invalid"
+    telephoneLength = 10
 
-def wait():
-    input("Press Enter to exit...")
+    randTelephone = str(''.join(random.choices(string.digits, k=telephoneLength)))
+    randFirstname = str(''.join(random.choices(string.ascii_lowercase, k=firstnameLength)))
+    randLastname = str(''.join(random.choices(string.ascii_lowercase, k=lastnameLength)))
+    randEmailHost = str(''.join(random.choices(string.ascii_lowercase, k=emailHostLength)))
+    randEmail = str(randFirstname) + "@" + str(randEmailHost) + str(emailTLD)
 
+    return randLastname, randFirstname, randEmail, randTelephone
+
+def sleep(): # debug
+    input("Press any key to continue")
+    
 if __name__ == "__main__":
     log.info("Program started")
     main()
