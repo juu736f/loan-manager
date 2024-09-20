@@ -1,12 +1,14 @@
 import os
+import sys
 import logging as log
 import argparse
 import mysql.connector as sql
 import random
 import string
 from tabulate import tabulate as tab
-import asyncio ## debugging
 
+e = None
+conn = None
 workingDir = os.getcwd()
 dbcredPath = os.path.join(workingDir, "dbcred")
 
@@ -23,36 +25,34 @@ else:
 
 def main():
     log.info("main invoked")
+    global conn
     readPermission = readPermissionCheck()
-    if readPermission == True:
-        initDBcred()
+    if os.path.exists(dbcredPath):
+        log.info("dbcred found")
+        if conn is None:
+            conn = dbConn()
+        dbWriteCheck()
     else:
-        print("Fatal error")
-        return
+        if readPermission == True:
+            initDBcred()
+        else:
+            log.critical(f"Fatal error: No read permissions in directory {workingDir}")
+            sys.exit(1)
+   
 
 def initDBcred():
     log.info("initDBcred invoked")
-    if os.path.exists(dbcredPath):
-        log.info("dbcred found")
-        dbWriteCheck()
-    else:
-        log.warning("dbcred NOT found")
-        dbcredMenu()
-
-def dbcredMenu():
-    log.info("dbcredUserInput invoked")
     while True:
         userInput = input("Do you want to create the database credential file? (yes/no): ")
         if userInput.lower() in ["yes", "y"]:
             log.info("User input YES to creating dbcred")
-            writePermissionCheck()
-            break
+            dbcredCreate()
         elif userInput.lower() in ["no", "n"]:
             log.info("User input NO to creating dbcred")
             print("Exiting...")
-            break
+            sys.exit(0)
         else:
-            log.warning("Are you serious?")
+            log.warning("Invalid input") 
             print(f"{userInput} is not a valid option (yes/no)")
 
 def readPermissionCheck():
@@ -64,7 +64,7 @@ def readPermissionCheck():
         log.error("Read permissions not granted.")
         readPermission = False
         print(f"[CRITICAL] Read permissions are not granted for the directory: {workingDir}")
-        return readPermission
+        sys.exit(1)
     
 def writePermissionCheck():
     log.info("writePermissionCheck invoked")
@@ -76,13 +76,26 @@ def writePermissionCheck():
         log.error("Write permissions not granted.")
         writePermission = False
         print(f"[CRITICAL] Write permissions are not granted for the directory: {workingDir}")
-        return writePermission
-
+        sys.exit(1)
 
 def dbcredCreate():
+    global conn
     log.info("dbcredCreate invoked")
-
-
+    writePermission = writePermissionCheck()
+    if writePermission is True:
+        dbHost = input("Insert hostname: ")
+        dbPort = input("Insert port: ")
+        dbUser = input("Insert username: ")
+        dbPass = input("Insert password: ")
+        dbData = input("Insert database: ")
+        with open("dbcred", "w") as file:
+            file.write(f"host='{dbHost}', port='{dbPort}', user='{dbUser}', password='{dbPass}', database='{dbData}'")
+        if conn is None:
+            conn = dbConn()
+    else:
+        log.critical(f"No write permissions for directory: {workingDir}")
+    dbWriteCheck()
+        
 def parseCredentials():
     log.info("parseCredentials invoked")
     with open(dbcredPath) as dbcred:
@@ -94,55 +107,133 @@ def parseCredentials():
         key, value = item.split("=")
         creds_dict[key.strip()] = value.strip().strip("'")
     return creds_dict
-
-
+        
 def dbConn():
-    log.info("dbConnectCheck invoked")
+    log.info("dbConn invoked")
+    log.info("(re-)Establishing database connection")
     creds_dict = parseCredentials()
-    conn = sql.connect(
-        host=creds_dict["host"],
-        port=int(creds_dict["port"]),
-        user=creds_dict["user"],
-        password=creds_dict["password"],
-        database=creds_dict["database"],
-    )
-    log.info(conn)
+    global conn
+    try:
+        conn = sql.connect(
+            host=creds_dict["host"],
+            port=int(creds_dict["port"]),
+            user=creds_dict["user"],
+            password=creds_dict["password"],
+            database=creds_dict["database"],
+            )
+    except sql.Error as e:
+        log.warning(f"Database {creds_dict['database']} not found.")
+        conn = sql.connect(
+            host=creds_dict["host"],
+            port=int(creds_dict["port"]),
+            user=creds_dict["user"],
+            password=creds_dict["password"],
+        )
+        cursor = conn.cursor()
+        cursor.execute(f"CREATE DATABASE `{creds_dict['database']}`")
+        cursor.execute(f"USE `{creds_dict['database']}`") 
+        cursor.execute("CREATE TABLE `customers` (`CustomerID` INT AUTO_INCREMENT PRIMARY KEY,`LastName` VARCHAR(256),`FirstName` VARCHAR(256),`Email` VARCHAR(256),`Telephone` VARCHAR(256))")
+        cursor.execute("ALTER TABLE `customers` ADD UNIQUE(`CustomerID`)")
+        cursor.execute("CREATE TABLE `devices` (`DeviceID` INT AUTO_INCREMENT PRIMARY KEY,`DeviceName` VARCHAR(512),`DeviceType` VARCHAR(256),`LoanStatus` BOOL)")
+        cursor.execute("ALTER TABLE `devices` ADD UNIQUE(`DeviceID`);")
+        cursor.execute("CREATE TABLE `loans` (`LoanID` INT AUTO_INCREMENT PRIMARY KEY,`CustomerID` INT,`DeviceID` INT,`LoanStart` DATE,`LoanEnd` DATE);")
+        cursor.execute("ALTER TABLE `loans` ADD UNIQUE(`LoanID`);")
+        cursor.execute("ALTER TABLE `loans` ADD CONSTRAINT `fk_customerid` FOREIGN KEY (`CustomerID`) REFERENCES customers(CustomerID) ON DELETE CASCADE ON UPDATE CASCADE;")
+        cursor.execute("ALTER TABLE `loans` ADD CONSTRAINT `fk_deviceid` FOREIGN KEY (`DeviceID`) REFERENCES devices(DeviceID) ON DELETE CASCADE ON UPDATE CASCADE; ")
+        conn.commit()
+        log.info(f"Database '{creds_dict['database']}' created successfully.")
+    finally:
+        conn = sql.connect(
+            host=creds_dict["host"],
+            port=int(creds_dict["port"]),
+            user=creds_dict["user"],
+            password=creds_dict["password"],
+            database=creds_dict["database"],
+            )
     return conn
 
+def dbConnClose():
+    log.info("dbConnClose invoked")
+    global conn
+    if conn and conn.is_connected():
+        conn.close()
+        log.info("Database connection closed")
 
 def dbWriteCheck():
     log.info("dbWriteCheck invoked")
+    global conn
     randomData = randomNameGenerator()
+    global rLastName
     rLastname = randomData[0]
     rFirstname = randomData[1]
     rEmail = randomData[2]
     rTelephone = randomData[3]
-    conn = dbConn()
     cursor = conn.cursor() 
     try:
         query = "INSERT INTO `customers` (`LastName`, `FirstName`, `Email`, `Telephone`) VALUES (%s, %s, %s, %s)"
         cursor.execute(query, (rLastname, rFirstname, rEmail, rTelephone))
         conn.commit()
         log.info("Data written to Database")
-    finally:
-        dbReadCheck()
+        dbReadCheck(rLastname, rFirstname)
+    except Exception as e:
+        log.critical(f"Failed to write to database: {e}")
+        
+        conn.close()
+        sys.exit(1)
 
 
-def dbReadCheck():
+def dbReadCheck(rLastname, rFirstname):
     log.info("dbReadCheck invoked")
-    conn = dbConn()
+    global conn
     cursor = conn.cursor()
     try:
-        query = "SELECT * FROM `customers`"
-        cursor.execute(query)
+        query = "SELECT * FROM `customers` WHERE LastName=%s"
+        cursor.execute(query, (rLastname,))
         queryResult = cursor.fetchall()
+        log.info(queryResult)
         headers = ['ID', 'Last Name', 'First Name', 'Email', 'Phone']
-        for res in queryResult:
-            print(tab(res, headers=headers, tablefmt='grid'))
+        print(tab(queryResult, headers=headers, tablefmt='grid'))
+        dbUpdateCheck(rLastname, rFirstname)
+    except Exception as e:
+        log.critical(f"Failed to read from database: {e}")
+        
+        conn.close()
+        sys.exit(1)
+        
+def dbUpdateCheck(rLastname, rFirstname):
+    log.info("dbUpdateCheck invoked")
+    global conn
+    cursor = conn.cursor()
+    try:
+        query = "UPDATE `customers` SET `LastName` = %s WHERE LastName = %s"
+        cursor.execute(query, (rFirstname, rLastname))
+        conn.commit()
+        log.info("%d record(s) affected", cursor.rowcount)
+        dbDeleteCheck(rFirstname)
+    except Exception as e:
+        log.critical(f"Failed to update database: {e}")
+        
+        conn.close()
+        sys.exit(1)
+        
+def dbDeleteCheck(rFirstname):
+    log.info("dbDeleteCheck invoked")
+    global conn
+    cursor = conn.cursor()
+    try:
+        query = "DELETE FROM `customers` WHERE FirstName=%s"
+        cursor.execute(query, (rFirstname,))
+        conn.commit()
+        log.info("%d record(s) affected", cursor.rowcount)
+    except Exception as e:
+        log.critical(f"Failed to delete from database: {e}")
+        conn.close()
+        sys.exit(1)
     finally:
-        sleep()
+        quit()
         
 def randomNameGenerator():
+    log.info("RandomNameGenerator invoked")
     lastnameLength = 8
     firstnameLength = 5
     emailHostLength = 8
@@ -154,11 +245,11 @@ def randomNameGenerator():
     randLastname = str(''.join(random.choices(string.ascii_lowercase, k=lastnameLength)))
     randEmailHost = str(''.join(random.choices(string.ascii_lowercase, k=emailHostLength)))
     randEmail = str(randFirstname) + "@" + str(randEmailHost) + str(emailTLD)
+    return randLastname, randFirstname, randEmail, randTelephone 
 
-    return randLastname, randFirstname, randEmail, randTelephone
-
-def sleep(): # debug
-    input("Press any key to continue")
+def quit():
+    conn.close()
+    sys.exit(0)
     
 if __name__ == "__main__":
     log.info("Program started")
